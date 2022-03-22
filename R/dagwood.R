@@ -4,11 +4,11 @@
 #' @export dagwood
 #' @import dagitty
 #' @importFrom utils combn
-#' @references https://arxiv.org/abs/2004.04251
+#' @references https://doi.org/10.1016/j.annepidem.2022.01.001
 #'
 #' @description A framework to help reveal key hidden assumptions in a causal directed acyclic graph
 #' (DAG). Details on how DAGs with Omitted Objects Displayed (DAGWOOD) works, can be used, and should
-#' be interpreted are available from our preprint: https://arxiv.org/abs/2004.04251
+#' be interpreted are available from our paper: https://doi.org/10.1016/j.annepidem.2022.01.001
 #' 
 #' DAGWOODS take a root DAG and generates DAGWOOD branch DAGs from it.
 #' At present, there are two types of branch DAGs:
@@ -136,21 +136,27 @@ dagwood <- function(DAG.root,exposure=NA,outcome=NA,KEBDs=NA,instrument=NA,fixed
             DAG.branch.candidate <- dagitty::dagitty(paste0("dag {",DAG.root,"\n",addition,"}"))
             dagitty::exposures(DAG.branch.candidate) <- exposure
             dagitty::outcomes(DAG.branch.candidate) <- outcome
-            forward <- test.DAG.branch.candidate(DAG.branch.candidate = DAG.branch.candidate,DAG.root=DAG.root,instrument=instrument,BD.type = "ER",changes.made=paste0("Added ",addition))
+            forward <- test.DAG.branch.candidate(DAG.branch.candidate = DAG.branch.candidate,DAG.root=DAG.root,instrument=instrument,BD.type = "ER",
+                                                 changes.made.description="Added edge",changes.made=addition,
+                                                 assumption.description=paste0("There are no pathways through which ",nodes.UEBD.temp[1]," causes ",nodes.UEBD.temp[2]," except through nodes already accounted-for."))
             forward <- forward[forward$verdict=="Passed",]
           # First, try <- and test
             addition <- paste0(nodes.UEBD.temp[1],"<-",nodes.UEBD.temp[2])
             DAG.branch.candidate <- dagitty(paste0("dag {",DAG.root,"\n",addition,"}"))
             dagitty::exposures(DAG.branch.candidate) <- exposure
             dagitty::outcomes(DAG.branch.candidate) <- outcome
-            backward <- test.DAG.branch.candidate(DAG.branch.candidate = DAG.branch.candidate,DAG.root=DAG.root,instrument=instrument,BD.type = "ER",changes.made=paste0("Added ",addition))
+            backward <- test.DAG.branch.candidate(DAG.branch.candidate = DAG.branch.candidate,DAG.root=DAG.root,instrument=instrument,BD.type = "ER",
+                                                  changes.made.description="Added edge",changes.made=addition,
+                                                  assumption.description=paste0("There are no pathways through which ",nodes.UEBD.temp[2]," causes ",nodes.UEBD.temp[1]," except through nodes already accounted-for."))
             backward <- backward[backward$verdict=="Passed",]
           # Lastly, try <-UEBD-> and test
-            addition <- paste0(nodes.UEBD.temp[1],"<-UEBD->",nodes.UEBD.temp[2])
+            addition <- paste0(nodes.UEBD.temp[1],"<-UnidentifiedNode->",nodes.UEBD.temp[2])
             DAG.branch.candidate <- dagitty(paste0("dag {",DAG.root,"\n",addition,"}"))
             dagitty::exposures(DAG.branch.candidate) <- exposure
             dagitty::outcomes(DAG.branch.candidate) <- outcome
-            bidirectional <- test.DAG.branch.candidate(DAG.branch.candidate = DAG.branch.candidate,DAG.root=DAG.root,instrument=instrument,BD.type = "ER",changes.made=paste0("Added ",addition))
+            bidirectional <- test.DAG.branch.candidate(DAG.branch.candidate = DAG.branch.candidate,DAG.root=DAG.root,instrument=instrument,BD.type = "ER",
+                                                       changes.made.description="Added unidentified node and edge(s)",changes.made=addition,
+                                                       assumption.description=paste0("There are no common causes of both ",nodes.UEBD.temp[1]," and ",nodes.UEBD.temp[2]," that are not already adjusted- or controlled-for."))
             bidirectional <- bidirectional[bidirectional$verdict=="Passed",]
           # Finally, merge into one data frame
             output <- rbind(forward,backward,bidirectional)
@@ -219,10 +225,22 @@ dagwood <- function(DAG.root,exposure=NA,outcome=NA,KEBDs=NA,instrument=NA,fixed
         # Collect all changes for reporting
           recording.temp <- edges.candidate.tracking[edges.candidate.tracking$flipped==1,]
           changes.made <- paste(paste0(recording.temp$v,recording.temp$e,recording.temp$w),collapse=", ")
+          recording.temp$change.text <- ifelse(recording.temp$e=="->",paste0(recording.temp$v," can cause ",recording.temp$w),paste0(recording.temp$w," can cause ",recording.temp$v))
+          if (nrow(recording.temp)==1) {
+            assumption.description <- paste0("There are no pathways through which ",recording.temp$change.text[1],".")
+          } else {
+            assumption.description <- paste0("There are no pathways through which both ",recording.temp$change.text[1],", and ",recording.temp$change.text[2],".")
+          }
+          
+          #else {
+          #   assumption.description <- paste0("Both ",recording.temp$change.text[1]," and ",recording.temp$change.text[2] }
+          #assumption.description <- "temp"
         # Test to see if this change results in a valid DAGWOOD branch DAG
         # Only test at target depth
           if (sum(edges.candidate.tracking$flipped)==depth.target){
-            test.candidate <- test.DAG.branch.candidate(DAG.branch.candidate = DAG.branch.candidate,DAG.root=DAG.root,instrument=instrument,BD.type = "MBD",changes.made=paste0("Flipped ",changes.made))
+            test.candidate <- test.DAG.branch.candidate(DAG.branch.candidate = DAG.branch.candidate,DAG.root=DAG.root,instrument=instrument,BD.type = "MBD",
+                                                        changes.made.description="Flipped edge(s)",changes.made=changes.made,
+                                                        assumption.description = assumption.description)
             return(test.candidate)
           } else {
             # If not yet at target depth, iterate to find more flip candidates
@@ -260,13 +278,18 @@ dagwood <- function(DAG.root,exposure=NA,outcome=NA,KEBDs=NA,instrument=NA,fixed
   # Combine into one big set of branch DAGs
     DAGs.tested <- rbind(UEBDs,MBDs)
     DAGs.branch <- DAGs.tested[DAGs.tested$verdict=="Passed",]
+    
+  # Generate summary of assumptions
+    summary <- paste("DAGWOOD has identified the following key assumptions, With respect to the root DAG:\n",
+                     paste(paste0(". ",DAGs.branch$assumption.description),collapse="\n"),sep="\n")
+    cat(summary)
 
   # Export
-    return(list("DAGs.branch" = DAGs.branch,"DAGs.tested"=DAGs.tested))
+    invisible(list("DAG.root" = DAG.root,"DAGs.branch" = DAGs.branch,"DAGs.tested"=DAGs.tested,"Summary"=summary))
 }
 
-# Function for determining if branch candidate passes DAGWOOD rules
-test.DAG.branch.candidate <- function(DAG.branch.candidate,DAG.root,instrument=NA,BD.type=NA,changes.made=NA) {
+# Function for determining if branch candidate passes DAGWOOD rules. (Note: the changes made variables are pass through strings)
+test.DAG.branch.candidate <- function(DAG.branch.candidate,DAG.root,instrument=NA,BD.type=NA,changes.made.description=NA,changes.made=NA,assumption.description="NA") {
   # Properties of the root DAG
     adjustment.set.root <- dagitty::adjustmentSets(DAG.root,effect="direct")
     adjustment.set.branch.candidate <- dagitty::adjustmentSets(DAG.branch.candidate,effect="direct")
@@ -340,7 +363,7 @@ test.DAG.branch.candidate <- function(DAG.branch.candidate,DAG.root,instrument=N
     }
 
   DAG.branch.candidate <- DAG.branch.candidate[1]
-  output <- data.frame(verdict,rule.1,rule.2,rule.3a,rule.3b,BD.type,changes.made,DAG.branch.candidate,
+  output <- data.frame(verdict,rule.1,rule.2,rule.3a,rule.3b,BD.type,changes.made.description,changes.made,DAG.branch.candidate,assumption.description,
                        stringsAsFactors = FALSE)
   return(output)
 }
